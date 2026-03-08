@@ -141,7 +141,7 @@ from module.data_fetcher import fetch_market_data, get_smart_money_data
 from module.execution import format_price, calculate_binance_qty, execute_trade_with_tpsl
 from module.database import log_trade, update_trade_result
 
-# --- HÀM HỖ TRỢ: KIỂM TRA KHOẢNG NGHỈ (COOL-DOWN) ---
+#region --- HÀM HỖ TRỢ: KIỂM TRA KHOẢNG NGHỈ (COOL-DOWN) ---
 # def is_in_cooldown(symbol, hours=1):
 #     """Ngăn bot vào lệnh liên tục trên cùng một cặp tiền sau khi vừa đóng lệnh"""
 #     conn = sqlite3.connect('trading_bot.db')
@@ -155,58 +155,105 @@ from module.database import log_trade, update_trade_result
 #         if datetime.now() < last_time + timedelta(hours=hours):
 #             return True
 #     return False
+#endregion
 
 def manage_trade(symbol, current_risk_pct):
-    # 1. Kiểm tra vị thế hiện tại
+    #region 1. Kiểm tra vị thế hiện tại
+    #Des: Giúp không để vào quá nhiều lệnh chồng chéo trên cùng 1 đồng
+
+    # Lấy danh sách các vị thế (Lệnh đang chạy)
     positions = exchange.fetch_positions([symbol])
+
+    # Quét qua danh sách vị thế vừa lấy về
     if any(float(p['contracts']) != 0 for p in positions if p['symbol'] == symbol):
         print(f"   [-] {symbol}: Đã có vị thế đang mở. Bỏ qua.")
         return
+    #endrgion
 
     # 2. Kiểm tra khoảng nghỉ (Cool-down) để tránh overtrading
     # if is_in_cooldown(symbol, hours=1):
     #     print(f"   [!] {symbol}: Đang trong thời gian nghỉ 1h sau lệnh trước.")
     #     return
 
+    # region Quản lý rủi ro trên toàn bộ tàì khoản
+    # Des: Nếu số vị thế = MAX_OPEN_POSITIONS thì sẽ không mở thêm vị thế
     active_pos_count = len([p for p in exchange.fetch_positions() if float(p['contracts']) != 0])
     if active_pos_count >= MAX_OPEN_POSITIONS:
         print(f"   [-] {symbol}: Đạt giới hạn tối đa ({MAX_OPEN_POSITIONS}) lệnh.")
         return
+    # endregion
     
-    # 3. Lấy dữ liệu Đa khung thời gian
+    # region Lấy dữ liệu Đa khung thời gian
+    # Des:  Kiểm tra xu hướng chủ đạo của thị trường dựa trên HTF trong config
+    #       Giúp bot không mở lệnh trái với xu hướng chính (bot sẽ mở lệnh ở khung 15m)
     df_htf = fetch_market_data(symbol, HTF)
     df_htf['ema200'] = ta.ema(df_htf['close'], length=200)
     # Xác định xu hướng khung lớn: Chỉ đánh thuận theo EMA 200
+    # Nếu giá < EMA200: UP || Giá > EMA200: DOWN
     htf_trend = "UP" if df_htf.iloc[-1]['close'] > df_htf.iloc[-1]['ema200'] else "DOWN"
+    # endregion
 
+    #region Kiểm tra market đang ở dạng nào để chọn chiến lược đánh
+    # Lấy dữ liệu ở khung tg thấp (LTF) để tính toán chỉ báo
     df_ltf = fetch_market_data(symbol, LTF)
-    # Thắt chặt bộ lọc ADX: Hạ xuống 20 để nhận diện xu hướng sớm hơn
+    # Đo độ mạnh xu hướng => bot nhận diện market đang giao động mạnh hay sideway
     df_ltf['adx'] = ta.adx(df_ltf['high'], df_ltf['low'], df_ltf['close'])['ADX_14']
+    # Đo lường độ biến động trung bình của giá: Trong 14 nến gần nhất, TB giá nhảy bao nhiêu đơn vị
     df_ltf['atr'] = ta.atr(df_ltf['high'], df_ltf['low'], df_ltf['close'])
-    
-    bb = ta.bbands(df_ltf['close'], length=20, std=2)
-    df_ltf['bb_lower'] = bb.iloc[:, 0]
-    df_ltf['bb_middle'] = bb.iloc[:, 1]
-    df_ltf['bb_upper'] = bb.iloc[:, 2]
+    #endregion
 
+    # region:   Thiết lập Bollinger Bands
+    # Des:      Xác định vùng "oversold" hoặc "overbuy" tại khung vào lệnh (15m)
+    #           Trong chế độ GRID: Bot tìm cách đánh đảo chiều
+    #           Trong chế độ TREND: Bot tìm cách đánh theo đà phá vỡ (Breakout).
+
+    # Tính toán chỉ báo BB dựa trên giá đóng cửa, length=20: chu kỳ 20 nến gần nhất
+    bb = ta.bbands(df_ltf['close'], length=20, std=2)
+
+    #Lấy cột đầu tiên của kết quả (thường là dải dưới - Lower Band). Đây được coi là vùng Hỗ trợ động.
+    df_ltf['bb_lower'] = bb.iloc[:, 0]
+
+    #Lấy cột thứ hai (đường trung bình giữa - Middle Band/SMA 20). Đây là trục cân bằng của giá.
+    df_ltf['bb_middle'] = bb.iloc[:, 1]
+
+    #Lấy cột thứ ba (dải trên - Upper Band). Đây được coi là vùng Kháng cự động.
+    df_ltf['bb_upper'] = bb.iloc[:, 2]
+    #endregion
+
+    #region Thu thập data thực tế trước khi đưa ra quyết định
+    # df_ltf: là bảng dữ liệu chứa hàng trăm cây nến 15 phút.
+    # .iloc[-1] lệnh cho bot chỉ lấy ra hàng cuối cùng (cây nến hiện tại đang chạy hoặc vừa đóng cửa). Đây là dữ liệu nóng nhất để bot xử lý.
+    
+    # Bot lấy giá trị cụ thể của ADX và ATR từ cây nến cuối cùng đó.
     last = df_ltf.iloc[-1]
+
+    #adx_value: Dùng để chọn chế độ đánh (Trend nếu >= ADX, Grid nếu < ADX).
     adx_value = last['adx']
+
+    #Dùng để tính toán khoảng cách dừng lỗ an toàn (2.5 x ATR)
     atr_value = last['atr']
+
+    #Bot gọi một hàm phụ trợ để lấy dữ liệu từ các "Cá mập" (Smart Money), thường là chỉ số Open Interest (OI)
     smart = get_smart_money_data(symbol)
+
+    # Kiểm tra số dư ví
     balance = exchange.fetch_balance()['total']['USDT']
 
-    # Xác định chế độ: Thắt chặt Grid chỉ khi ADX < 20
-    is_trend_mode = adx_value >= 20 
+    # region Xác định chế độ
+    # Des:  Xác định trạng thái market
+    is_trend_mode = adx_value >= 25 
     mode_label = "📈 TREND" if is_trend_mode else "↔️ GRID"
     
     strategy, side, sl_raw, tp_raw = None, None, 0, 0
     reasons = []
+    #endregion
 
-    # --- 4. PHÂN TÍCH LOGIC CẢI TIẾN ---
-
+    # region --- LOGIC QUYẾT ĐỊNH ---
     if is_trend_mode:
         # CHIẾN LƯỢC TREND: Chỉ đánh thuận HTF
         if htf_trend == "UP":
+            # Giá phải đóng cửa vượt ra ngoài dải Bollinger Bands
+            # Chỉ số Open Interest (OI) phải đang tăng (xác nhận rằng "Cá mập" đang thực sự đổ tiền vào để đẩy giá đi tiếp)
             if last['close'] > last['bb_upper'] and smart['oi_trend'] == "UP":
                 strategy, side = "TREND_FOLLOW_LONG", "LONG"
                 # Cải thiện SL: Dùng ATR x 2.5 để tránh quét râu
@@ -235,6 +282,7 @@ def manage_trade(symbol, current_risk_pct):
             tp_raw = last['bb_middle']
         else:
             reasons.append(f"Sideway ngược xu hướng chính hoặc chưa chạm biên")
+    #endregion
 
     # --- 5. HIỂN THỊ LOG & VÀO LỆNH ---
     if strategy:
