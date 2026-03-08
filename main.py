@@ -1,14 +1,11 @@
 print("Chương trình đã bắt đầu khởi chạy...")
 from datetime import datetime
 import time
-from module.config import SYMBOLS
+from module.config import SYMBOLS, BASE_RISK, MAIN_LOOP_SLEEP
 from module.database import init_db
 from module.strategy import check_closed_trades, manage_trade
 from module.reflection import get_risk_multiplier, weekly_reflection
-from module.telegram import send_telegram
-
-# Khởi điểm 3% để phù hợp với vốn 40$
-BASE_RISK = 0.03 
+from module.telegram import send_telegram 
 
 print("Đang khởi tạo Database...")
 init_db()
@@ -40,4 +37,4 @@ while True:
     print(f"--- Đang kiểm tra trạng thái các lệnh cũ ---")
     check_closed_trades()
 
-    time.sleep(300)
+    time.sleep(MAIN_LOOP_SLEEP)

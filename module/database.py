@@ -1,7 +1,8 @@
 import sqlite3
+from module.config import DATABASE_NAME
 
 def init_db():
-    conn = sqlite3.connect('trading_bot.db')
+    conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trade_history (
@@ -19,7 +20,7 @@ def init_db():
     conn.close()
 
 def update_trade_result(symbol, result, pnl):
-    conn = sqlite3.connect('trading_bot.db')
+    conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     # Sử dụng Subquery để tìm ID của lệnh UNKNOWN mới nhất của symbol đó
     cursor.execute('''
@@ -35,7 +36,7 @@ def update_trade_result(symbol, result, pnl):
     conn.close()
 
 def log_trade(symbol, strategy, side, entry_price, adx_value):
-    conn = sqlite3.connect('trading_bot.db')
+    conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     cursor.execute('''
         INSERT INTO trade_history (symbol, strategy, side, entry_price, adx_value)

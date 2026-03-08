@@ -136,7 +136,19 @@ import sqlite3
 import pandas as pd
 import pandas_ta as ta
 from datetime import datetime, timedelta
-from module.config import exchange, HTF, LTF, MAX_OPEN_POSITIONS
+from module.config import (
+    exchange, 
+    HTF, 
+    LTF, 
+    MAX_OPEN_POSITIONS,
+    EMA_LENGTH,
+    ADX_PERIOD,
+    ADX_TRENDING_THRESHOLD,
+    BB_LENGTH,
+    BB_STD,
+    ATR_MULTIPLIER_SL,
+    ATR_MULTIPLIER_TP
+)
 from module.data_fetcher import fetch_market_data, get_smart_money_data
 from module.execution import format_price, calculate_binance_qty, execute_trade_with_tpsl
 from module.database import log_trade, update_trade_result
@@ -187,9 +199,9 @@ def manage_trade(symbol, current_risk_pct):
     # Des:  Kiểm tra xu hướng chủ đạo của thị trường dựa trên HTF trong config
     #       Giúp bot không mở lệnh trái với xu hướng chính (bot sẽ mở lệnh ở khung 15m)
     df_htf = fetch_market_data(symbol, HTF)
-    df_htf['ema200'] = ta.ema(df_htf['close'], length=200)
-    # Xác định xu hướng khung lớn: Chỉ đánh thuận theo EMA 200
-    # Nếu giá < EMA200: UP || Giá > EMA200: DOWN
+    df_htf['ema200'] = ta.ema(df_htf['close'], length=EMA_LENGTH)
+    # Xác định xu hướng khung lớn: Chỉ đánh thuận theo EMA 
+    # Nếu giá < EMA: UP || Giá > EMA: DOWN
     htf_trend = "UP" if df_htf.iloc[-1]['close'] > df_htf.iloc[-1]['ema200'] else "DOWN"
     # endregion
 
@@ -197,7 +209,7 @@ def manage_trade(symbol, current_risk_pct):
     # Lấy dữ liệu ở khung tg thấp (LTF) để tính toán chỉ báo
     df_ltf = fetch_market_data(symbol, LTF)
     # Đo độ mạnh xu hướng => bot nhận diện market đang giao động mạnh hay sideway
-    df_ltf['adx'] = ta.adx(df_ltf['high'], df_ltf['low'], df_ltf['close'])['ADX_14']
+    df_ltf['adx'] = ta.adx(df_ltf['high'], df_ltf['low'], df_ltf['close'])[f'ADX_{ADX_PERIOD}']
     # Đo lường độ biến động trung bình của giá: Trong 14 nến gần nhất, TB giá nhảy bao nhiêu đơn vị
     df_ltf['atr'] = ta.atr(df_ltf['high'], df_ltf['low'], df_ltf['close'])
     #endregion
@@ -208,7 +220,7 @@ def manage_trade(symbol, current_risk_pct):
     #           Trong chế độ TREND: Bot tìm cách đánh theo đà phá vỡ (Breakout).
 
     # Tính toán chỉ báo BB dựa trên giá đóng cửa, length=20: chu kỳ 20 nến gần nhất
-    bb = ta.bbands(df_ltf['close'], length=20, std=2)
+    bb = ta.bbands(df_ltf['close'], length=BB_LENGTH, std=BB_STD)
 
     #Lấy cột đầu tiên của kết quả (thường là dải dưới - Lower Band). Đây được coi là vùng Hỗ trợ động.
     df_ltf['bb_lower'] = bb.iloc[:, 0]
@@ -241,7 +253,7 @@ def manage_trade(symbol, current_risk_pct):
 
     # region Xác định chế độ
     # Des:  Xác định trạng thái market
-    is_trend_mode = adx_value >= 25 
+    is_trend_mode = adx_value >= ADX_TRENDING_THRESHOLD
     mode_label = "📈 TREND" if is_trend_mode else "↔️ GRID"
     
     strategy, side, sl_raw, tp_raw = None, None, 0, 0
@@ -257,16 +269,16 @@ def manage_trade(symbol, current_risk_pct):
             if last['close'] > last['bb_upper'] and smart['oi_trend'] == "UP":
                 strategy, side = "TREND_FOLLOW_LONG", "LONG"
                 # Cải thiện SL: Dùng ATR x 2.5 để tránh quét râu
-                sl_raw = last['close'] - (2.5 * atr_value)
-                tp_raw = last['close'] + (4.0 * atr_value) # Tăng R:R lên 1:1.6
+                sl_raw = last['close'] - (ATR_MULTIPLIER_SL * atr_value)
+                tp_raw = last['close'] + (ATR_MULTIPLIER_TP * atr_value) # Tăng R:R lên 1:1.6
             else:
                 reasons.append(f"Chờ breakout & OI (OI: {smart['oi_trend']})")
         
         elif htf_trend == "DOWN":
             if last['close'] < last['bb_lower'] and smart['oi_trend'] == "UP":
                 strategy, side = "TREND_FOLLOW_SHORT", "SHORT"
-                sl_raw = last['close'] + (2.5 * atr_value)
-                tp_raw = last['close'] - (4.0 * atr_value)
+                sl_raw = last['close'] + (ATR_MULTIPLIER_SL * atr_value)
+                tp_raw = last['close'] - (ATR_MULTIPLIER_TP * atr_value)
             else:
                 reasons.append(f"Chờ breakout & OI (OI: {smart['oi_trend']})")
 
@@ -274,11 +286,11 @@ def manage_trade(symbol, current_risk_pct):
         # CHIẾN LƯỢC GRID THÔNG MINH: Vẫn phải thuận HTF
         if htf_trend == "UP" and last['close'] <= last['bb_lower']:
             strategy, side = "GRID_SMART_LONG", "LONG"
-            sl_raw = last['close'] - (2.5 * atr_value)
+            sl_raw = last['close'] - (ATR_MULTIPLIER_SL * atr_value)
             tp_raw = last['bb_middle']
         elif htf_trend == "DOWN" and last['close'] >= last['bb_upper']:
             strategy, side = "GRID_SMART_SHORT", "SHORT"
-            sl_raw = last['close'] + (2.5 * atr_value)
+            sl_raw = last['close'] + (ATR_MULTIPLIER_SL * atr_value)
             tp_raw = last['bb_middle']
         else:
             reasons.append(f"Sideway ngược xu hướng chính hoặc chưa chạm biên")
