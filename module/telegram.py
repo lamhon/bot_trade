@@ -1,10 +1,10 @@
 import requests
-from module.config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
+from module.config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, TELEGRA_REQUEST_TIMEOUT
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try:
-        requests.post(url, json=payload, timeout=10)
+        requests.post(url, json=payload, timeout=TELEGRA_REQUEST_TIMEOUT)
     except Exception as e:
         print(f"⚠️ Không gửi được Telegram (có thể do mạng): {e}")

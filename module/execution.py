@@ -1,4 +1,4 @@
-from module.config import exchange
+from module.config import exchange, MIN_NOTIONAL_DEFAULT, MIN_NOTIONAL_BUFFER
 from module.telegram import send_telegram
 
 def format_price(symbol, price):
@@ -25,11 +25,11 @@ def calculate_binance_qty(symbol, risk_usdt, sl_distance):
             
         # 3. Kiểm tra giá trị lệnh tối thiểu (Min Notional)
         # Binance Futures thường yêu cầu lệnh tối thiểu 5 hoặc 10 USDT
-        min_cost = market['limits']['cost']['min'] if market['limits']['cost']['min'] else 5.0
+        min_cost = market['limits']['cost']['min'] if market['limits']['cost']['min'] else MIN_NOTIONAL_DEFAULT
         
         if (qty * current_price) < min_cost:
             # Nếu giá trị lệnh quá nhỏ, buộc phải tăng Qty lên mức tối thiểu của sàn
-            qty = float(exchange.amount_to_precision(symbol, (min_cost + 0.1) / current_price))
+            qty = float(exchange.amount_to_precision(symbol, (min_cost + MIN_NOTIONAL_BUFFER) / current_price))
             print(f"   ⚠️ {symbol}: Giá trị lệnh quá thấp. Đã điều chỉnh Qty lên {qty} để đạt {min_cost} USDT.")
 
         return qty
